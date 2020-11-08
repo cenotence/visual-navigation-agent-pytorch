@@ -8,11 +8,13 @@ import habitat_sim
 import habitat_sim.agent
 import habitat_sim.bindings as hsim
 
+import numpy as np
+
 default_sim_settings = {
     # settings shared by example.py and benchmark.py
     "max_frames": 20,
-    "width": 224,
-    "height": 224,
+    "width": 512,
+    "height": 384,
     "default_agent": 0,
     "sensor_height": 1.5,
     "color_sensor": True,  # RGB sensor (default: ON)
@@ -37,13 +39,17 @@ default_sim_settings = {
 }
 
 @attr.s(auto_attribs=True, slots=True)
+class MoveSpec:
+    forward_amount: float
+
+@attr.s(auto_attribs=True, slots=True)
 class SpinSpec:
     spin_amount: float
 
 @habitat_sim.registry.register_move_fn(body_action=True)
 class Surge(habitat_sim.SceneNodeControl):
     def __call__(
-        self, scene_node: habitat_sim.SceneNode, actuation_spec: habitat_sim.agent.ActuationSpec
+        self, scene_node: habitat_sim.SceneNode, actuation_spec: MoveSpec
     ):
         forward_ax = (
             np.array(scene_node.absolute_transformation().rotation_scaling())
@@ -54,7 +60,7 @@ class Surge(habitat_sim.SceneNodeControl):
 @habitat_sim.registry.register_move_fn(body_action=True)
 class Sway(habitat_sim.SceneNodeControl):
     def __call__(
-        self, scene_node: habitat_sim.SceneNode, actuation_spec: habitat_sim.agent.ActuationSpec
+        self, scene_node: habitat_sim.SceneNode, actuation_spec: MoveSpec
     ):
         left_ax = (
             np.array(scene_node.absolute_transformation().rotation_scaling())
@@ -65,7 +71,7 @@ class Sway(habitat_sim.SceneNodeControl):
 @habitat_sim.registry.register_move_fn(body_action=True)
 class Heave(habitat_sim.SceneNodeControl):
     def __call__(
-        self, scene_node: habitat_sim.SceneNode, actuation_spec: habitat_sim.agent.ActuationSpec
+        self, scene_node: habitat_sim.SceneNode, actuation_spec: MoveSpec
     ):
         up_ax = (
             np.array(scene_node.absolute_transformation().rotation_scaling())
@@ -190,46 +196,46 @@ def make_cfg(scene):
     agent_cfg.sensor_specifications = sensor_specs
     agent_cfg.action_space = {
         "PositiveSurge": habitat_sim.agent.ActionSpec(
-            "Surge", habitat_sim.agent.ActuationSpec(amount=0.1)
+            "Surge", MoveSpec(forward_amount=0.1)
         ),
         "NegativeSurge": habitat_sim.ActionSpec(
-            "Surge", habitat_sim.agent.ActuationSpec(amount=-0.1)
+            "Surge", MoveSpec(forward_amount=-0.1)
         ),
         "PositiveSway": habitat_sim.agent.ActionSpec(
-            "Sway", habitat_sim.agent.ActuationSpec(amount=0.1)
+            "Sway", MoveSpec(forward_amount=0.1)
         ),
         "NegativeSway": habitat_sim.ActionSpec(
-            "Sway", habitat_sim.agent.ActuationSpec(amount=-0.1)
+            "Sway", MoveSpec(forward_amount=-0.1)
         ),
         "PositiveHeave": habitat_sim.agent.ActionSpec(
-            "Heave", habitat_sim.agent.ActuationSpec(amount=0.1)
+            "Heave", MoveSpec(forward_amount=0.1)
         ),
         "NegativeHeave": habitat_sim.ActionSpec(
-            "Heave", habitat_sim.agent.ActuationSpec(amount=-0.1)
+            "Heave", MoveSpec(forward_amount=-0.1)
         ),
         "PositiveRoll": habitat_sim.ActionSpec(
-            "Roll", SpinSpec(1.0)
+            "Roll", SpinSpec(0.1)
         ),
         "NegativeRoll": habitat_sim.ActionSpec(
-            "Roll", SpinSpec(-1.0)
+            "Roll", SpinSpec(-0.1)
         ),
         "PositivePitch": habitat_sim.ActionSpec(
-            "Pitch", SpinSpec(1.0)
+            "Pitch", SpinSpec(5)
         ),
         "NegativePitch": habitat_sim.ActionSpec(
-            "Pitch", SpinSpec(-1.0)
+            "Pitch", SpinSpec(-5)
         ),
         "PositiveYaw": habitat_sim.ActionSpec(
-            "Yaw", SpinSpec(1.0)
+            "Yaw", SpinSpec(5)
         ),
         "NegativeYaw": habitat_sim.ActionSpec(
-            "Yaw", SpinSpec(-1.0)
+            "Yaw", SpinSpec(-5)
         )
     }
 
     # override action space to no-op to test physics
     if sim_cfg.enable_physics:
-        agent_cfg.action_space = {
+            agent_cfg.action_space = {
             "move_forward": habitat_sim.agent.ActionSpec(
                 "move_forward", habitat_sim.agent.ActuationSpec(amount=0.0)
             )

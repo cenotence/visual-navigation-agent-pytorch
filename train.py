@@ -2,6 +2,7 @@
 import torch
 import argparse
 import torch.multiprocessing as mp
+mp.set_start_method('forkserver', force=True)
 import os
 '''
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
@@ -33,7 +34,7 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
 
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device('cuda:1')
+    device = torch.device('cuda:0')
 
     if args['restore']:
         t = Training.load_checkpoint(args)

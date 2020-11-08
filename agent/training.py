@@ -14,20 +14,24 @@ from contextlib import suppress
 import re
 
 
-TOTAL_PROCESSED_FRAMES = 20 * 10**6
+TOTAL_PROCESSED_FRAMES = 10000
 
 bench_dir = "agent/environment/bench/"
 #Env Name, Image
-TASK_LIST = { bench_dir + 'Arkansaw.glb': bench_dir + 'Arkansaw_des.png', 
-            bench_dir + 'Hillsdale.glb': bench_dir + 'Hillsdale_des.png' }
+TASK_LIST = { bench_dir + 'Ballou.glb': bench_dir + 'Ballou_des.png' }
+#              bench_dir + 'Stokes.glb': bench_dir + 'Stokes_des.png' ,
+#              bench_dir + 'Roane.glb': bench_dir + 'Roane_des.png'
+#            }
+#TASK_LIST = { bench_dir + 'Arkansaw.glb': bench_dir + 'Arkansaw_des.png' }
+#           , bench_dir + 'Hillsdale.glb': bench_dir + 'Hillsdale_des.png' }
 
 DEFAULT_CONFIG = {
-    'saving_period': 10 ** 6 // 5,
+    'saving_period': 10000,
     'checkpoint_path': 'model/checkpoint-{checkpoint}.pth',
     'grad_norm': 40.0,
     'gamma': 0.99,
     'entropy_beta': 0.01,
-    'max_t': 5,
+    'max_t': 1,
 }
 
 
@@ -50,7 +54,7 @@ class TrainingSaver:
 
     def print_config(self, offset: int = 0):
         for key, val in self.config.items():
-            print(key, value)
+            print(key, val)
             #print((" " * offset) + f"{key}: {val}")
         pass
 
@@ -66,6 +70,7 @@ class TrainingSaver:
         
         with suppress(FileExistsError):
             os.makedirs(os.path.dirname(filename))
+
         torch.save(model, open(filename, 'wb'))
 
     def restore(self, state):
@@ -199,7 +204,7 @@ class Training:
     def initialize(self):
         self.shared_network = SharedNetwork().to(self.device)
         # 12 actions Roll pitch yaw surge sway heave
-        self.scene_networks = { key:SceneSpecificNetwork(12).to(self.device) for key in TASK_LIST.keys() }
+        self.scene_networks = { key:SceneSpecificNetwork(8).to(self.device) for key in TASK_LIST.keys() }
 
         self.shared_network.share_memory()
         for net in self.scene_networks.values():
@@ -227,7 +232,7 @@ class Training:
         branches = [(scene, TASK_LIST.get(scene)) for scene in TASK_LIST.keys()]
         def _createThread(id, task):
             (scene_glb, target_img) = task
-            net = nn.Sequential(self.shared_network, self.scene_networks[scene_glb])
+            net = nn.Sequential(self.shared_network, self.scene_networks[scene_glb]).to(self.device)
             net.share_memory()
             return TrainingThread(
                 id = id,

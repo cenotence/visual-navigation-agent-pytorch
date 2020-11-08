@@ -5,6 +5,7 @@ from typing import Dict, Collection
 import signal
 import random
 import torch
+from torchvision import transforms
 from agent.replay import ReplayMemory, Sample
 from collections import namedtuple
 import torch.multiprocessing as mp
@@ -14,6 +15,7 @@ import logging
 from multiprocessing import Condition
 
 TrainingSample = namedtuple('TrainingSample', ('state', 'policy', 'value', 'action_taken', 'goal', 'R', 'temporary_difference'))
+from matplotlib import pyplot as plt
 
 
 class TrainingThread(mp.Process):
@@ -41,6 +43,10 @@ class TrainingThread(mp.Process):
         self.master_network = network
         self.optimizer = optimizer
         self.device = device
+
+        self.fig = plt.figure()
+        self.time_list = []
+        self.reward_list = []
 
     def _sync_network(self):
         self.policy_network.load_state_dict(self.master_network.state_dict())
@@ -93,11 +99,12 @@ class TrainingThread(mp.Process):
                 "goal": self.env.render_target(),
             }
 
-            x_processed = torch.from_numpy(state["current"])
+            x_processed = torch.Tensor(state["current"])
+            x_processed = x_processed.permute(0, 3, 1, 2).to(self.device)
             
-            goal_processed = torch.from_numpy(state["goal"])
-
-            print("Calculating action")
+            goal_processed = torch.Tensor(state["goal"])
+            goal_processed = goal_processed.permute(0, 3, 1, 2).to(self.device)
+            
             (policy, value) = self.policy_network((x_processed, goal_processed,))
 
             # Store raw network output to use in backprop
@@ -108,21 +115,30 @@ class TrainingThread(mp.Process):
                 (_, action,) = policy.max(0)
                 action = F.softmax(policy, dim=0).multinomial(1).item()
             
-            policy = policy.data.numpy()
-            value = value.data.numpy()
+            policy = policy.cpu().data.numpy()
+            value = value.cpu().data.numpy()
             
             # Makes the step in the environment
             print("Stepping Agent with, ", action)
+            #self.f.write("Stepping Action with" + str(action))
             self.env.step(action)
 
             # Receives the game reward
             is_terminal = self.env.is_terminal
+            is_collision = self.env.is_collision
 
             # ad-hoc reward for navigation
-            reward = 10.0 if is_terminal else -0.01
+            #reward = 10.0 if is_terminal else -0.01
+            if is_terminal:
+                reward = 10.0
+            elif is_collision:
+                reward = -0.1
+            else:
+                reward = -0.01
 
             # Max episode length
-            if self.episode_length > 5e3: is_terminal = True
+            if self.episode_length > 500 : is_terminal = True
+            if is_collision : is_terminal = True
 
             # Update episode stats
             self.episode_length += 1
@@ -141,24 +157,48 @@ class TrainingThread(mp.Process):
             rollout_path["done"].append(is_terminal)
 
             if is_terminal:
-                # TODO: add logging
+                # Logging the training stats
                 print('playout finished')
-                print('Episode Length: ', self.episode_length)
-                print('Episode Reward: ', self.episode_reward)
-                print('Episode max_q', self.episode_max_q)
+                with open("log.txt", "a") as myfile:
+                    myfile.write("appended text")
+                    myfile.write("Local Time: " + str(self.local_t))
+                    myfile.write("\n")
+
+                    print('Episode Length: ', self.episode_length)
+                    myfile.write("Episode Length: " + str(self.episode_length))
+                    myfile.write("\n")
+
+                    print('Episode Reward: ', self.episode_reward)
+                    myfile.write("Episode Reward " + str(self.episode_reward))
+                    myfile.write("\n")
+                    
+                    print('Episode max_q', self.episode_max_q)
+                    myfile.write("Episode max_q " + str(self.episode_max_q))
+                    myfile.write("\n")                
+                
+                self.time_list.append(self.local_t)
+                self.reward_list.append(self.episode_reward)
 
                 terminal_end = True
+                plt.plot(self.time_list, self.reward_list)
+                plt.savefig('reward.png')
                 self._reset_episode()
                 break
 
         if terminal_end:
             return 0.0, results, rollout_path
         else:
-            x_processed = torch.from_numpy(self.env.render())
-            goal_processed = torch.from_numpy(self.env.render_target())
+            x_processed = torch.Tensor(self.env.render())
+            x_processed = x_processed.permute(0, 3, 1, 2).to(self.device)
+            
+            goal_processed = torch.Tensor(self.env.render_target())
+            goal_processed = goal_processed.permute(0, 3, 1, 2).to(self.device)
 
             (_, value) = self.policy_network((x_processed, goal_processed,))
-            return value.data.item(), results, rollout_path
+            return value, results, rollout_path
+            #return value.data.item(), results, rollout_path
+        f.close()
+        f1.close()
     
     def _optimize_path(self, playout_reward: float, results, rollout_path):
         policy_batch = []
@@ -188,10 +228,10 @@ class TrainingThread(mp.Process):
         playout_reward_batch = torch.from_numpy(np.array(playout_reward_batch, dtype=np.float32))
         
         # Compute loss
-        loss = self.criterion.forward(policy_batch, value_batch, action_batch, temporary_difference_batch, playout_reward_batch)
+        loss = self.criterion.forward(policy_batch, value_batch, action_batch.to(self.device), temporary_difference_batch.to(self.device), playout_reward_batch.to(self.device))
         loss = loss.sum()
 
-        loss_value = loss.detach().numpy()
+        loss_value = loss.cpu().detach().numpy()
         self.optimizer.optimize(loss, 
             self.policy_network.parameters(), 
             self.master_network.parameters())
@@ -209,9 +249,7 @@ class TrainingThread(mp.Process):
 
         try:
             self.env.reset()
-            print("Env resetted")
             while True:
-                print("While Loop started")
                 self._sync_network()
                 # Plays some samples
                 playout_reward, results, rollout_path = self._forward_explore()

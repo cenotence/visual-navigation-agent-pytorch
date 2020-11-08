@@ -27,9 +27,11 @@ class SharedNetwork(nn.Module):
         super(SharedNetwork, self).__init__()
         # Resnet50 Feature Extractor
         
-        resnet = models.resnet50(pretrained=True)
-        modules=list(resnet.children())[:-1]
-        self.feature_extractor = nn.Sequential(*modules)
+        self.features = models.resnet50(pretrained=True)
+        modules = list(self.features.children())[:-1]
+        self.features = nn.Sequential(*modules)
+        for params in self.features.parameters():
+            params.requires_grad = False
         
         # Siemense layer
         self.fc_siemense = nn.Linear(8192, 512)
@@ -41,12 +43,15 @@ class SharedNetwork(nn.Module):
     def forward(self, inp):
         (x, y,) = inp
         
-        x = self.feature_extractor(x)
+        # x: [history, 3, 224, 224]
+        # Using batch size as history.
+        x = self.features(x)
+        # x: [history, 2048, 1, 1]
         x = x.view(-1)
         x = self.fc_siemense(x)  
         x = F.relu(x, True)
 
-        y = self.feature_extractor(y)
+        y = self.features(y)
         y = y.view(-1)
         y = self.fc_siemense(y)
         y = F.relu(y, True)

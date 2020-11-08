@@ -3,56 +3,119 @@ import sys
 import json
 import numpy as np
 import random
-from skimage import io
-from skimage.transform import resize
+from PIL import Image
 from agent.environment.environment import Environment
-from agent.environment.habitatenv import HabitatEnv
+from agent.environment.habitatenv import HabitatEnv, e2q, q2e
 from torchvision import transforms
+
+def photometric_error(img1, img2):
+    imageA = np.asarray(img1)
+    imageB = np.asarray(img2) 
+    err = np.sum((imageA.astype("float") - imageB.astype("float"))**2)
+    err /= float(imageA.shape[0] * imageA.shape[1])
+    return err
+
+'''
+def pose_error(p, gt_p, yaw):
+    px = abs(gt_p[0] - p.position[0])
+    py = abs(gt_p[1] - p.position[1])
+    pz = abs(gt_p[2] - p.position[2])
+    dyaw = abs(yaw - q2e(p.rotation.w, p.rotation.x, p.rotation.y, p.rotation.z)[1])
+    #return px,py,pz
+    #return px,pz,dyaw
+    return px,py,pz
+'''
+
+def pose_error(p, gt_p):
+    px = abs(gt_p[0] - p.position[0])
+    py = abs(gt_p[1] - p.position[1])
+    pz = abs(gt_p[2] - p.position[2])
+    return px,py,pz
 
 
 class HabitatDiscreteEnvironment(Environment):
     def __init__(self,
             scene_name = 'Arkansaw',
-            screen_width = 224,
-            screen_height = 224,
+            screen_width = 384,
+            screen_height = 512,
             terminal_image = None,
+            history_length = 4,
             **kwargs):
         super(HabitatDiscreteEnvironment, self).__init__()
         self.env = HabitatEnv(scene_name)
-        self.target_image = io.imread(terminal_image)
+        self.history_length = history_length
+        target_image = Image.open(terminal_image)
+        target_image = np.array(target_image, dtype=np.float32)[:,:,:3] / 255
+        self.mean = [0.485, 0.456, 0.406]
+        self.std = [0.229, 0.224, 0.225]
+        self.target = (target_image - self.mean) / self.std
+        self.target = np.repeat(self.target[np.newaxis,...], self.history_length, axis=0)
+        self.target_pose = [ -0.05, 0, -0.5, 1, 0, 0, 0]
+        self.yaw = np.degrees(q2e(self.target_pose[3], self.target_pose[4], self.target_pose[5], self.target_pose[6])[1])
+        self.collision = False
 
     def reset(self):
         self.time = 0
         self.collided = 0
         self.terminal = 0
+        self.collision = False
 
         self.env.reset()
-        self.state = self.env.observation
-        print("Reset Done", flush=True)
-    
-    @staticmethod
-    def photometric_error(self, img1, img2):
-        imageA = np.asarray(img1)
-        imageB = np.asarray(img2) 
-        err = np.sum((imageA.astype("float") - imageB.astype("float"))**2)
-        err /= float(imageA.shape[0] * imageA.shape[1])
-        return err
+        curr_image = self.env.get_color_observation()
+        curr_image = (curr_image - self.mean) / self.std
+        self.state = np.repeat(curr_image[np.newaxis,...], self.history_length, axis=0)
 
     def step(self, action):
         assert not self.terminal, 'step() called in terminal state'
-        print(action)
-        self.env.step(action)
-        if photometric_error(self.state, self.target_image) < 500:
+        self.env.step(self.actions[action])
+        '''
+        pe = photometric_error(self.state[-1], self.target[-1])
+        if pe < 30000:
+            print(pe)
+            self.tminal = True
+            # save image
+            self.env.save_image()
+        '''
+
+        curr_pose = self.env.get_agent_pose()
+        #px,pz,dyaw = pose_error(curr_pose, self.target_pose, self.yaw)
+        print(curr_pose)
+        px,py,pz = pose_error(curr_pose, self.target_pose)
+        print(px)
+        print(py)
+        print(pz)
+
+        '''
+        if px <= 0.1 and pz <= 0.1 and dyaw < 5:
             self.terminal = True
+            self.env.save_image()
+        '''
+
+        if px <= 0.1 and py <= 0.1 and pz <= 0.1:
+            self.terminal = True
+            self.env.save_image()
+        
+        if px > 1.0 or pz > 1.0 or py > 1.0:
+            self.collision = True
+        
+        self.env.save_image_all()
+
         #self.s_t = np.append(self.s_t[:,1:], self._get_state(self.current_state_id), axis=1)
-        self.s_t = self.env.observation
+        # Remove last image and append new.
+        self.state[:-1] = self.state[1:]
+        curr_image = self.env.get_color_observation()
+        curr_image = (curr_image - self.mean) / self.std
+        self.state[-1] = curr_image
         self.time += 1
 
+    def get_agent_pose(self):
+        return self.env.get_agent_pose()
+        
     def render(self):
-        return self.env.get_color_observation()
+        return self.state
     
     def render_target(self):
-        return self.target_image
+        return self.target
 
     def _calculate_reward(self, terminal, collided):
         # positive reward upon task completion
@@ -66,14 +129,32 @@ class HabitatDiscreteEnvironment(Environment):
 
     @property
     def is_terminal(self):
-        return self.terminal or self.time >= 5e3
+        return self.terminal or self.time >= 600
+    
+    @property
+    def is_collision(self):
+        return self.collision
 
     @property
     def actions(self):
+        '''
+        return ["PositiveSurge", "NegativeYaw", "PositiveYaw"]
+        '''
+        return ["PositiveSurge", "NegativeSurge", "PositiveHeave", "NegativeHeave",
+                "PositivePitch", "NegativePitch", "PositiveYaw", "NegativeYaw"]
+        return ["PositiveSurge", "PositiveSway", "PositiveHeave",
+                "NegativeSway", "NegativeHeave", "NegativeSurge"]
+
+        '''
+        return ["PositiveSurge", "PositiveSway", "NegativeSway", 
+                ""]
+        '''
+        '''
         return ["PositiveSurge", "PositiveSway", "PositiveHeave", 
                 "PositiveRoll", "PositivePitch", "PositiveYaw",
-                "NegativeSurge", "NegativeSway", "NegativeHeave", 
-                "NegativeRoll", "NegativePitch", "NegativeYaw"]
+                "NegativeSway", "NegativeHeave", "NegativeRoll", 
+                "NegativePitch", "NegativeYaw", "NegativeSurge"]
+        '''
 '''
 class THORDiscreteEnvironment(Environment):
     @staticmethod
